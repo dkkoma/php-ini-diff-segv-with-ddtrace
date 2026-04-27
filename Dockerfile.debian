@@ -1,0 +1,38 @@
+# Minimal repro: ddtrace + pcov on php:8.5-cli (Debian).
+#
+# php:8.5-cli is built from debian-slim. We install pcov (smallest
+# co-extension that reliably triggers the SEGV) and ddtrace via the official
+# Datadog installer.
+FROM php:8.5-cli
+
+RUN apt-get update -qq \
+ && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        libcurl4-openssl-dev \
+        $PHPIZE_DEPS \
+ && rm -rf /var/lib/apt/lists/*
+
+# pcov is enabled via docker-php-ext-enable so it gets loaded from
+# /usr/local/etc/php/conf.d/, which is what we need for the SEGV path
+# (the SEGV requires extensions to be loaded via php.ini, not -d flags).
+RUN pecl install pcov \
+ && docker-php-ext-enable pcov
+
+# Datadog official installer. Pin via build arg if you want a specific tag,
+# otherwise pulls the latest release.
+ARG DD_TRACE_RELEASE=latest
+RUN set -eux; \
+    if [ "$DD_TRACE_RELEASE" = "latest" ]; then \
+        URL="https://github.com/DataDog/dd-trace-php/releases/latest/download/datadog-setup.php"; \
+    else \
+        URL="https://github.com/DataDog/dd-trace-php/releases/download/${DD_TRACE_RELEASE}/datadog-setup.php"; \
+    fi; \
+    curl -fsSLo /tmp/datadog-setup.php "$URL"; \
+    php /tmp/datadog-setup.php --php-bin=all; \
+    rm /tmp/datadog-setup.php
+
+COPY repro.sh /usr/local/bin/repro.sh
+RUN chmod +x /usr/local/bin/repro.sh
+
+ENTRYPOINT ["/usr/local/bin/repro.sh"]

@@ -1,0 +1,86 @@
+name: ddtrace --ini=diff repro
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: 'Iterations of `php --ini=diff` to run'
+        required: false
+        default: '100'
+      dd_trace_release:
+        description: 'ddtrace release tag (or "latest")'
+        required: false
+        default: 'latest'
+
+permissions:
+  contents: read
+
+jobs:
+  repro:
+    name: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [debian, alpine]
+    env:
+      ITERATIONS: ${{ inputs.iterations || '100' }}
+      DD_TRACE_RELEASE: ${{ inputs.dd_trace_release || 'latest' }}
+      IMAGE: ddtrace-segv-repro:${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Use the GitHub Actions cache backend (type=gha) so we don't rebuild
+      # the ddtrace + pcov layers every run. Scope per-OS so debian and
+      # alpine don't fight over the same cache key.
+      - name: Build image (with GHA cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.${{ matrix.os }}
+          tags: ${{ env.IMAGE }}
+          load: true
+          build-args: |
+            DD_TRACE_RELEASE=${{ env.DD_TRACE_RELEASE }}
+          cache-from: type=gha,scope=${{ matrix.os }}
+          cache-to: type=gha,scope=${{ matrix.os }},mode=max
+
+      - name: Run repro
+        run: |
+          docker run --rm \
+            -e ITERATIONS="$ITERATIONS" \
+            "$IMAGE" | tee repro-output.txt
+
+      - name: Summarise result
+        run: |
+          set -eu
+          # Universal symptom (data corruption) — must reproduce.
+          if ! grep -qE '^PART1_RESULT: data corruption observed' repro-output.txt; then
+            echo "::error::Part 1 (data corruption) did NOT reproduce on ${{ matrix.os }} — possibly fixed upstream?"
+            grep -E '^(PART1_RESULT|PART2_RESULT|OVERALL):' repro-output.txt || true
+            exit 1
+          fi
+          # Layout-dependent symptom (SIGSEGV) — report but do not gate.
+          # Open question per findings: does amd64 SEGV at the same rate as aarch64?
+          segv=$(grep -oE 'PART2_RESULT: SIGSEGV [0-9]+' repro-output.txt | awk '{print $3}')
+          part1=$(grep -E '^PART1_RESULT:' repro-output.txt)
+          {
+            echo "### ${{ matrix.os }}"
+            echo ""
+            echo "- $part1"
+            echo "- SIGSEGV: ${segv} / ${ITERATIONS}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload repro output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: repro-output-${{ matrix.os }}
+          path: repro-output.txt
