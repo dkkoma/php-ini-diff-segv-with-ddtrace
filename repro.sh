@@ -58,17 +58,15 @@ else
 fi
 echo
 
-echo "--- Part 2: SIGSEGV reproduction (ddtrace + sodium via php.ini) ---"
-# ddtrace is loaded via /usr/local/etc/php/conf.d/98-ddtrace.ini (created
-# by the Datadog installer). The stock php:8.5-cli image also enables
-# sodium via conf.d, which gives us the "second extension loaded via
-# php.ini" the SEGV needs. No extra setup.
+echo "--- Part 2: SIGSEGV reproduction (ddtrace + apcu via php.ini) ---"
+# Both ddtrace (98-ddtrace.ini, created by the Datadog installer) and
+# apcu (docker-php-ext-apcu.ini) are loaded via /usr/local/etc/php/conf.d/.
 
 echo "Files in /usr/local/etc/php/conf.d/:"
 ls /usr/local/etc/php/conf.d/ | sed 's/^/  /'
 echo
 echo "Loaded modules (subset):"
-php -r 'foreach (["ddtrace","sodium"] as $e) printf("  %-10s %s\n", $e, extension_loaded($e) ? "loaded" : "NOT LOADED");'
+php -r 'foreach (["ddtrace","apcu","sodium"] as $e) printf("  %-10s %s\n", $e, extension_loaded($e) ? "loaded" : "NOT LOADED");'
 echo
 
 echo "Running 'php --ini=diff' ${ITERATIONS} times..."

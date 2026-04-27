@@ -23,13 +23,12 @@ for the full investigation notes.
 - ddtrace: installed via the official Datadog installer
   (`datadog-setup.php`), which also auto-creates
   `/usr/local/etc/php/conf.d/98-ddtrace.ini`.
-- Second extension: **none added** — the stock images already enable
-  `sodium` via `conf.d`, which is enough as the second extension loaded
-  via `php.ini` to push the layout into the SEGV regime.
-
-Earlier versions of this repo installed `pcov` as an explicit second
-extension (per the original findings notes); empirically the
-default-shipped `sodium` is sufficient on the layouts we tested.
+- Second extension: **apcu** (PECL, ~10s build). Lightweight and ubiquitous
+  in production PHP apps as a userland cache, so this represents a
+  realistic setup. The stock-shipped `sodium` alone is enough on arm64
+  but doesn't reliably reach the SEGV layout on amd64 — `apcu` adds
+  enough INI directives to perturb the layout into the SEGV regime
+  there too.
 
 ## Run locally
 

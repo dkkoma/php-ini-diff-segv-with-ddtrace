@@ -1,14 +1,20 @@
-# Minimal repro: stock php:8.5-cli + ddtrace.
+# Minimal repro: stock php:8.5-cli + ddtrace + apcu.
 #
-# The stock image already enables `sodium` via /usr/local/etc/php/conf.d/,
-# which is enough as the "second extension loaded via php.ini" needed to
-# push the layout into the SEGV regime. No PECL build needed.
+# `apcu` is the "second extension loaded via php.ini" that pushes the
+# memory layout into the SEGV regime. It's lightweight (~10s PECL build)
+# and ubiquitous in production PHP apps as a userland cache, so this
+# represents a realistic setup. The default-shipped `sodium` alone is
+# enough on arm64 but doesn't reach the SEGV layout on amd64.
 FROM php:8.5-cli
 
 RUN apt-get update -qq \
  && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
+        $PHPIZE_DEPS \
+ && pecl install apcu \
+ && docker-php-ext-enable apcu \
+ && apt-get purge -y --auto-remove $PHPIZE_DEPS \
  && rm -rf /var/lib/apt/lists/*
 
 # Datadog official installer. Pin via build arg if you want a specific tag,

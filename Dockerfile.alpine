@@ -1,7 +1,11 @@
-# Minimal repro: stock php:8.5-cli-alpine + ddtrace.
+# Minimal repro: stock php:8.5-cli-alpine + ddtrace + apcu.
 FROM php:8.5-cli-alpine
 
-RUN apk add --no-cache ca-certificates curl libgcc
+RUN apk add --no-cache ca-certificates curl libgcc \
+ && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS \
+ && pecl install apcu \
+ && docker-php-ext-enable apcu \
+ && apk del .build-deps
 
 ARG DD_TRACE_RELEASE=latest
 RUN set -eux; \
