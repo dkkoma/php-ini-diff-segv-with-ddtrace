@@ -20,16 +20,28 @@ permissions:
 
 jobs:
   repro:
-    name: ${{ matrix.os }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        os: [debian, alpine]
+        include:
+          - os: debian
+            arch: amd64
+            runner: ubuntu-latest
+          - os: debian
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - os: alpine
+            arch: amd64
+            runner: ubuntu-latest
+          - os: alpine
+            arch: arm64
+            runner: ubuntu-24.04-arm
     env:
       ITERATIONS: ${{ inputs.iterations || '100' }}
       DD_TRACE_RELEASE: ${{ inputs.dd_trace_release || 'latest' }}
-      IMAGE: ddtrace-segv-repro:${{ matrix.os }}
+      IMAGE: ddtrace-segv-repro:${{ matrix.os }}-${{ matrix.arch }}
 
     steps:
       - uses: actions/checkout@v4
@@ -37,9 +49,8 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Use the GitHub Actions cache backend (type=gha) so we don't rebuild
-      # the ddtrace + pcov layers every run. Scope per-OS so debian and
-      # alpine don't fight over the same cache key.
+      # GitHub Actions cache (type=gha), scoped per (os, arch) so each
+      # combination keeps its own cached ddtrace install layer.
       - name: Build image (with GHA cache)
         uses: docker/build-push-action@v6
         with:
@@ -49,8 +60,8 @@ jobs:
           load: true
           build-args: |
             DD_TRACE_RELEASE=${{ env.DD_TRACE_RELEASE }}
-          cache-from: type=gha,scope=${{ matrix.os }}
-          cache-to: type=gha,scope=${{ matrix.os }},mode=max
+          cache-from: type=gha,scope=${{ matrix.os }}-${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.os }}-${{ matrix.arch }},mode=max
 
       - name: Run repro
         run: |
@@ -64,7 +75,7 @@ jobs:
           part1=$(grep -E '^PART1_RESULT:' repro-output.txt || echo "PART1_RESULT: <missing>")
           segv=$(grep -oE 'PART2_RESULT: SIGSEGV [0-9]+' repro-output.txt | awk '{print $3}' || echo "?")
           {
-            echo "### ${{ matrix.os }}"
+            echo "### ${{ matrix.os }} / ${{ matrix.arch }}"
             echo ""
             echo "- $part1"
             echo "- SIGSEGV: ${segv} / ${ITERATIONS}"
@@ -82,5 +93,5 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: repro-output-${{ matrix.os }}
+          name: repro-output-${{ matrix.os }}-${{ matrix.arch }}
           path: repro-output.txt

@@ -72,17 +72,17 @@ the bug is fixed upstream).
 
 ## CI
 
-`.github/workflows/repro.yml` runs both Debian and Alpine on
-`ubuntu-latest` (amd64). Docker layer cache is wired up via
-`type=gha` (scoped per-OS) so the ddtrace install layer doesn't get
-rebuilt every push.
+`.github/workflows/repro.yml` runs the full {debian, alpine} ×
+{amd64, arm64} matrix on native runners (`ubuntu-latest` for amd64,
+`ubuntu-24.04-arm` for arm64). Docker layer cache uses `type=gha`
+scoped per `(os, arch)`, so each cell keeps its own cached ddtrace
+install layer.
 
 The job doesn't assert on outcomes — it just runs the repro and posts
 the full output plus a summary (Part 1 result, SIGSEGV count) to the
-job summary, so you can read what each `os × arch` combination actually
-does. SIGSEGV is layout-dependent (e.g. observed 0% on alpine-amd64,
-~50% on debian-amd64, 100% on aarch64), so a green CI run does not
-mean the bug is gone — read the summary.
+job summary, so you can read what each combination actually does.
+SIGSEGV is layout-dependent, so a green CI run does not mean the bug
+is gone — read the summary.
 
 Trigger manually with custom inputs via the **Run workflow** button.
 
@@ -92,13 +92,7 @@ Trigger manually with custom inputs via the **Run workflow** button.
 `php -n -d extension=ddtrace.so --ini=diff` (universal symptom — orig
 should equal value, so nothing should appear).
 
-| host arch | os     | Part 1 | SIGSEGV (n=100) |
-|-----------|--------|--------|-----------------|
-| aarch64   | debian | yes    | 100/100         |
-| aarch64   | alpine | yes    | 100/100         |
-| amd64     | debian | yes    | ~50/100         |
-| amd64     | alpine | yes    | 0/100 (NULL orig — no deref) |
-
-The visible orig_value form differs by layout (garbage bytes on
-aarch64, `(none)` / `""` on amd64), but the row appearing at all is
+See the latest CI run for current numbers across the {debian, alpine}
+× {amd64, arm64} matrix. The visible orig_value form differs by layout
+(garbage bytes, `(none)`, or `""`), but the row appearing at all is
 the bug.
