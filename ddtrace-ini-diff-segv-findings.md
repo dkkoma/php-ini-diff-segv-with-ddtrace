@@ -1,26 +1,48 @@
 # ddtrace `--ini=diff` orig_value corruption / SIGSEGV — investigation summary
 
-調査メモ。standalone な再現 repo を作るための材料として、ここまでに確かめたことを記録。
+Investigation notes recording what we've confirmed so far, kept as
+working material for assembling a standalone reproduction repo.
 
 ## 1. TL;DR
 
-- **本体バグ**: `ddtrace` 拡張は `datadog.*` の INI ディレクティブを「壊れた `orig_value` ポインタ」で登録している。すべての `datadog.*` ディレクティブが**同じ 1 個のダングリング/未初期化のポインタ**を `orig_value` として共有している。
-- **可視化された経路**: PHP 8.5 で導入された `php --ini=diff` が、各 INI ディレクティブの `orig_value` を `%s` で印字するため、この壊れたポインタの中身が出力に現れる（文字化け）。それ以前の PHP では誰も `orig_value` を全件読みにいくコードパスを通らなかったので潜在化していた。
-- **症状**:
-  1. **データ corruption（universal）**: `--ini=diff` が `datadog.* : "<壊れた文字列>" -> "<実値>"` を出す。`php -n -d extension=ddtrace.so --ini=diff` の 1 行だけで観測可能。
-  2. **SIGSEGV（メモリレイアウト依存）**: 壊れたポインタが unmapped 域を指すレイアウトになると `php_printf` / `php_printf_to_smart_string` で SEGV。当環境では `ddtrace + 任意の追加 .so 1 個` を `php.ini` 経由でロードすると 100% 再現。
-- **修正位置**: upstream ddtrace（https://github.com/DataDog/dd-trace-php）。INI 登録時に `orig_value` を string literal もしくは永続バッファで保持するよう直せば両方消える。
+- **Underlying bug**: the `ddtrace` extension registers every `datadog.*`
+  INI directive with a "broken `orig_value` pointer". All `datadog.*`
+  directives share **the same single dangling/uninitialised pointer**
+  as their `orig_value`.
+- **How it became visible**: `php --ini=diff`, introduced in PHP 8.5,
+  prints each INI directive's `orig_value` via `%s`, so the contents
+  of that broken pointer end up in the output (garbage bytes). Before
+  PHP 8.5 nothing exercised a code path that read every directive's
+  `orig_value`, so the bug stayed dormant.
+- **Symptoms**:
+  1. **Data corruption (universal)**: `--ini=diff` prints
+     `datadog.* : "<garbage>" -> "<actual value>"`. Reproducible from
+     a single command line:
+     `php -n -d extension=ddtrace.so --ini=diff`.
+  2. **SIGSEGV (memory-layout dependent)**: when the broken pointer
+     happens to land in unmapped memory, `php_printf` /
+     `php_printf_to_smart_string` segfaults. In our environment,
+     loading `ddtrace + any one extra .so` via `php.ini` reproduces
+     this 100% of the time.
+- **Where the fix belongs**: upstream ddtrace
+  (https://github.com/DataDog/dd-trace-php). Storing `orig_value` as a
+  string literal or in a persistent buffer at INI-registration time
+  fixes both symptoms.
 
-## 2. 確認環境
+## 2. Confirmed environment
 
-- PHP 8.5.5 (`php:8.5-cli` ベースの colopl/docker-php image)
-- ddtrace 拡張: `/opt/datadog-php/extensions/ddtrace-20250925.so` (Datadog 公式インストーラ由来)
+- PHP 8.5.5 (colopl/docker-php image, derived from `php:8.5-cli`)
+- ddtrace extension: `/opt/datadog-php/extensions/ddtrace-20250925.so`
+  (from the official Datadog installer)
 - aarch64 (Apple Silicon, OrbStack)
-- `php --ini=diff` は PHP 8.5 で追加された新 CLI フラグ。8.4 以前にはこのコードパスは無い。
+- `php --ini=diff` is a new CLI flag added in PHP 8.5; this code path
+  doesn't exist in 8.4 or earlier.
 
-## 3. データ corruption の証拠
+## 3. Evidence of data corruption
 
-`-n` で全 `php.ini` を無効化し、`-d extension=...` で ddtrace のみロードするだけでも、全 `datadog.*` の `orig_value` が文字化けで出る。
+Disabling all `php.ini` files with `-n` and loading only ddtrace via
+`-d extension=...` is enough to surface garbage `orig_value` for every
+`datadog.*` directive:
 
 ```sh
 $ php -n -d extension=/opt/datadog-php/extensions/ddtrace-20250925.so --ini=diff
@@ -33,70 +55,92 @@ datadog.apm_tracing_enabled: "�K����" -> "true"
 ...
 ```
 
-ポイント:
+Notes:
 
-- すべての `datadog.*` の "default" 列が **同一の 1 個の壊れたポインタ**を参照している（毎回同じ文字列が出る）。これは ddtrace の INI 登録ループが `orig_value` フィールドに「同一の一時バッファ/スタック領域のアドレス」を全エントリに格納してしまっていることを強く示唆。
-- 別プロセスで実行すると毎回違う文字化けが出る（ASLR 由来）。同一プロセス内では同一の garbage。
+- The "default" column for every `datadog.*` directive references **the
+  same single broken pointer** (the same string is printed every time).
+  This strongly suggests the ddtrace INI-registration loop is storing
+  the address of one shared temporary buffer / stack region in the
+  `orig_value` field of every entry.
+- Different processes show different garbage (ASLR-derived). Within a
+  single process, the garbage is identical across entries.
 
-## 4. SIGSEGV としての発現条件（n=100 で計測）
+## 4. Conditions for the SIGSEGV symptom (measured at n=100)
 
-| config | 壊れた orig_value の印字 | SIGSEGV 率 |
+| config | broken orig_value printed | SIGSEGV rate |
 |---|---|---|
-| `php -n -d extension=ddtrace.so --ini=diff` | あり | 0/100 |
-| `php -n -d extension=pcov -d extension=ddtrace.so --ini=diff` | あり | 0/100 |
-| `php -d extension=pcov -d extension=ddtrace.so --ini=diff`（php.ini あり） | あり | 100/100 |
-| `PHP_INI_SCAN_DIR=$tmp php --ini=diff`（ddtrace.ini のみ） | あり | 0/100 |
-| `PHP_INI_SCAN_DIR=$tmp php --ini=diff`（grpc.ini + ddtrace.ini） | あり | 100/100 |
-| `PHP_INI_SCAN_DIR=$tmp php --ini=diff`（xdebug.ini + ddtrace.ini） | あり | 100/100 |
-| `PHP_INI_SCAN_DIR=$tmp php --ini=diff`（pcov.ini + ddtrace.ini） | あり | 100/100 |
-| `PHP_INI_SCAN_DIR=$tmp php --ini=diff`（colopl_bc.ini + ddtrace.ini） | あり | 0/100 |
+| `php -n -d extension=ddtrace.so --ini=diff` | yes | 0/100 |
+| `php -n -d extension=pcov -d extension=ddtrace.so --ini=diff` | yes | 0/100 |
+| `php -d extension=pcov -d extension=ddtrace.so --ini=diff` (with php.ini) | yes | 100/100 |
+| `PHP_INI_SCAN_DIR=$tmp php --ini=diff` (ddtrace.ini only) | yes | 0/100 |
+| `PHP_INI_SCAN_DIR=$tmp php --ini=diff` (grpc.ini + ddtrace.ini) | yes | 100/100 |
+| `PHP_INI_SCAN_DIR=$tmp php --ini=diff` (xdebug.ini + ddtrace.ini) | yes | 100/100 |
+| `PHP_INI_SCAN_DIR=$tmp php --ini=diff` (pcov.ini + ddtrace.ini) | yes | 100/100 |
+| `PHP_INI_SCAN_DIR=$tmp php --ini=diff` (colopl_bc.ini + ddtrace.ini) | yes | 0/100 |
 
-読み取れること:
+Takeaways:
 
-- ddtrace 単独 では SEGV しない（壊れた orig_value は readable な garbage 域に乗っている）
-- ddtrace に「もう 1 個 .so をロードする」「`php.ini` を読む」のいずれかでメモリレイアウトが変わり、壊れた orig_value が unmapped 域へ移動 → 100% SEGV
-- 100% を出した同居 .so: `grpc`、`xdebug`、`pcov`。**`pcov` がビルド最軽量**（数秒）なので upstream 再現用にはこれが最適。
-- `colopl_bc` だけ 0%（偶然 readable 域に乗ったまま）
+- ddtrace alone does not SEGV (the broken `orig_value` happens to land
+  on a readable garbage region).
+- Either "load one more `.so`" or "read `php.ini`" is enough to shift
+  the memory layout so the broken `orig_value` lands in unmapped
+  memory — at which point we see 100% SEGV.
+- `.so`s that produced 100% SEGV when co-loaded: `grpc`, `xdebug`,
+  `pcov`. **`pcov` has the cheapest build** (a few seconds), so it's
+  the best fit for an upstream reproduction.
+- `colopl_bc` was the only one at 0% (the broken pointer happened to
+  stay in a readable region by coincidence).
 
-## 5. gdb backtrace（SEGV 時）
+## 5. gdb backtrace (at SEGV)
 
-`php --ini=diff` が落ちるときのスタック（symbol なしビルドなので `??` だらけだが、PHP 関数名は得られる）:
+Stack when `php --ini=diff` crashes (the build has no debug symbols
+so we get `??` for many frames, but PHP function names come through):
 
 ```
-#0  in libc.so.6                              # おそらく __strlen / memcpy on bad pointer
-#1  ??                                        # SAPI cli display_ini_entries_diff 内
+#0  in libc.so.6                              # likely __strlen / memcpy on the bad pointer
+#1  ??                                        # inside the SAPI cli display_ini_entries_diff
 #2  php_printf_to_smart_string ()
 #3  zend_vspprintf ()
 #4  php_printf ()
-#5  ??                                        # SAPI cli の diff 出力ループ
+#5  ??                                        # the SAPI cli diff-printing loop
 #6  ??                                        # main
 #7  __libc_start_main () from libc.so.6
 #8  _start ()
 ```
 
-`php_printf("...%s...", entry->orig_value, ...)` で `orig_value` が未マップ番地 → libc の文字列処理で SEGV、という標準的なパターン。
+The standard pattern: `php_printf("...%s...", entry->orig_value, ...)`
+hits an unmapped page through `orig_value` and libc's string
+processing crashes.
 
-## 6. 上流バグの所在（仮説）
+## 6. Hypothesised location of the upstream bug
 
-`Zend/zend_ini.c` 系の API は INI 登録時に `orig_value` を内部でコピーして保持する動作になっているはず。なので、ddtrace 側のコードで以下のいずれかが起きていると推定:
+The `Zend/zend_ini.c` API is supposed to copy and retain `orig_value`
+internally at registration time. So one of the following is presumably
+happening on the ddtrace side:
 
-- ddtrace が独自に `zend_ini_entry` 構造体を組み立てて hash に直接挿入していて、`orig_value` をスタック上の一時バッファのアドレスにしている
-- もしくは登録直後に解放される heap バッファのアドレスをそのまま入れている
-- もしくは `orig_value` を初期化していない（malloc 直後のごみが残っている）
+- ddtrace builds `zend_ini_entry` structs by hand and inserts them into
+  the hash directly, storing the address of a stack-local temporary
+  buffer in `orig_value`.
+- Or it stores the address of a heap buffer that is freed immediately
+  after registration.
+- Or it doesn't initialise `orig_value` at all (so what's left is
+  whatever garbage was in the freshly malloc'd memory).
 
-dd-trace-php のソースで `orig_value` または `ini_entry` を直接組み立てている箇所を grep するのが最初の一歩。
+The first step is to grep for places in `dd-trace-php` that build
+`orig_value` or `ini_entry` directly.
 
-## 7. 上流に投げるときの最小再現案
+## 7. Minimal reproduction proposals (for the upstream report)
 
-### 6.1 cmdline ワンライナー（データ corruption の証拠）
+### 6.1 Single-command-line evidence (data corruption)
 
 ```sh
 php -n -d extension=/path/to/ddtrace.so --ini=diff
 ```
 
-→ `datadog.* : "<garbage>" -> "<value>"` の連発。1 行 + ddtrace.so 1 個だけ。
+→ Produces a stream of `datadog.* : "<garbage>" -> "<value>"`. One
+command line + the ddtrace.so on its own.
 
-### 6.2 SIGSEGV 確実再現（symptom の重さの証拠）
+### 6.2 Reliable SIGSEGV reproduction (evidence of severity)
 
 ```sh
 # php:8.5-cli + pcov + ddtrace
@@ -112,20 +156,29 @@ docker run --rm -v /opt/datadog-php:/opt/datadog-php php:8.5-cli sh -c '
 '
 ```
 
-→ `139` (SEGV) が 100 回出る想定。
+→ Expect `139` (SEGV) 100 times.
 
-注: `-v /opt/datadog-php:/opt/datadog-php` の代わりに、Datadog 公式インストーラを container 内で走らせれば、外部マウント不要で完結する。
+Note: instead of `-v /opt/datadog-php:/opt/datadog-php`, you can run
+the official Datadog installer inside the container so no external
+mount is needed.
 
-## 8. オープンクエスチョン（再現 repo を組むときに片付けたい）
+## 8. Open questions (to clean up while assembling the repro repo)
 
-- [ ] stock な `php:8.5-cli` + Datadog 公式インストーラ + pcov の組み合わせで本当に 100% SEGV が出るか（colopl-baked image 依存ではないか）
-- [ ] amd64 でも同様の率で再現するか
-- [ ] PHP 8.5.0 / 8.5.1 / 8.5.5 で挙動が変わるか（5 はうちの環境）
-- [ ] ddtrace の他バージョン（e.g. 1.5、1.10、最新）で再現するか — 何バージョンから/まで影響するか
-- [ ] 壊れた orig_value がどこに由来するのか、ddtrace ソースを `grep -r 'orig_value\|REGISTER_INI_ENTRIES'` で当てる
+- [ ] Does the stock `php:8.5-cli` + the official Datadog installer +
+  pcov combination really produce 100% SEGV? (Or is this dependent on
+  the colopl-baked image?)
+- [ ] Does it reproduce on amd64 at the same rate?
+- [ ] Does the behavior change between PHP 8.5.0 / 8.5.1 / 8.5.5? (We
+  observed on 8.5.5.)
+- [ ] Does it reproduce on other ddtrace versions (e.g. 1.5, 1.10,
+  latest)? Which versions are affected?
+- [ ] Where does the broken `orig_value` come from? Try
+  `grep -r 'orig_value\|REGISTER_INI_ENTRIES'` over the ddtrace source.
 
-## 9. 当面の運用回避
+## 9. Operational workarounds for the time being
 
-- `php --ini=diff` を呼ばない（CLI ユーザの教育のみで運用回避可能）
-- どうしても呼ぶ必要があるなら、`-n -d extension=...` で必要拡張を絞り、ddtrace を含めない
-- `ddtrace.disable=1` は **効かない**（拡張は load されるので INI 登録は走る）
+- Don't call `php --ini=diff`. Pure user-education workaround.
+- If you really need to call it, narrow the loaded extensions with
+  `-n -d extension=...` and don't include ddtrace.
+- `ddtrace.disable=1` does **not** help — the extension is still loaded,
+  so its INI registration still runs.

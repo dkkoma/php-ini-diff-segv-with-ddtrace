@@ -58,16 +58,16 @@ docker build -f Dockerfile.debian \
 
 ## Output
 
-The script prints a few machine-readable result lines at the end:
+The script prints two machine-readable result lines at the end:
 
 ```
-PART1_RESULT: data corruption observed (378 / 378 datadog.* directives have non-empty orig_value)
+PART1_RESULT: bug observed (378 datadog.* directives wrongly appear in --ini=diff; orig_value sample: "@w�r��")
 PART2_RESULT: SIGSEGV 100 / 100
-OVERALL: BUG REPRODUCED
 ```
 
-Exit code is `0` when either symptom reproduces, `1` otherwise (e.g. if
-the bug is fixed upstream).
+The script always exits 0 — it doesn't assert, it just reports. Same
+for the CI workflow (which posts these lines plus the full output to
+the job summary).
 
 ## CI
 
@@ -91,7 +91,23 @@ Trigger manually with custom inputs via the **Run workflow** button.
 `php -n -d extension=ddtrace.so --ini=diff` (universal symptom — orig
 should equal value, so nothing should appear).
 
-See the latest CI run for current numbers across the {debian, alpine}
-× {amd64, arm64} matrix. The visible orig_value form differs by layout
-(garbage bytes, `(none)`, or `""`), but the row appearing at all is
-the bug.
+Latest CI run (`pcov` + ddtrace, n=100):
+
+| os × arch        | Part 1 | SIGSEGV     |
+|------------------|--------|-------------|
+| debian / arm64   | yes    | **100/100** |
+| alpine / arm64   | yes    | **100/100** |
+| debian / amd64   | yes    | ~40/100 (flaky, varies run to run) |
+| alpine / amd64   | yes    | 0/100       |
+
+Part 1 reproduces on **every** combination. SIGSEGV is layout-dependent:
+arm64 always lands on unmapped memory and crashes, debian-amd64 is in a
+flaky middle regime (we've observed runs at 0/100, 39/100, 48/100), and
+alpine-amd64 (musl) tends to settle on a readable layout where the
+`%s` printf walks the garbage and exits cleanly.
+
+The visible `orig_value` form also differs by layout — garbage bytes
+on arm64-glibc, `(none)` (NULL pointer) on amd64-glibc when the
+uninitialised slot happens to be NULL, etc. — but the directive
+appearing in `--ini=diff` at all is the bug. See the latest CI run's
+job summary for current numbers and full output.
