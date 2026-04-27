@@ -1,26 +1,18 @@
-# Minimal repro: ddtrace + pcov on php:8.5-cli (Debian).
+# Minimal repro: stock php:8.5-cli + ddtrace.
 #
-# php:8.5-cli is built from debian-slim. We install pcov (smallest
-# co-extension that reliably triggers the SEGV) and ddtrace via the official
-# Datadog installer.
+# The stock image already enables `sodium` via /usr/local/etc/php/conf.d/,
+# which is enough as the "second extension loaded via php.ini" needed to
+# push the layout into the SEGV regime. No PECL build needed.
 FROM php:8.5-cli
 
 RUN apt-get update -qq \
  && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
-        libcurl4-openssl-dev \
-        $PHPIZE_DEPS \
  && rm -rf /var/lib/apt/lists/*
 
-# pcov is enabled via docker-php-ext-enable so it gets loaded from
-# /usr/local/etc/php/conf.d/, which is what we need for the SEGV path
-# (the SEGV requires extensions to be loaded via php.ini, not -d flags).
-RUN pecl install pcov \
- && docker-php-ext-enable pcov
-
 # Datadog official installer. Pin via build arg if you want a specific tag,
-# otherwise pulls the latest release.
+# otherwise pulls the latest release. Auto-creates 98-ddtrace.ini in conf.d.
 ARG DD_TRACE_RELEASE=latest
 RUN set -eux; \
     if [ "$DD_TRACE_RELEASE" = "latest" ]; then \

@@ -23,10 +23,13 @@ for the full investigation notes.
 - ddtrace: installed via the official Datadog installer
   (`datadog-setup.php`), which also auto-creates
   `/usr/local/etc/php/conf.d/98-ddtrace.ini`.
-- Second extension: `pcov` (smallest co-extension; ~5s to build).
+- Second extension: **none added** — the stock images already enable
+  `sodium` via `conf.d`, which is enough as the second extension loaded
+  via `php.ini` to push the layout into the SEGV regime.
 
-Both extensions end up loaded via `conf.d`, which is what the SEGV path
-needs.
+Earlier versions of this repo installed `pcov` as an explicit second
+extension (per the original findings notes); empirically the
+default-shipped `sodium` is sufficient on the layouts we tested.
 
 ## Run locally
 
@@ -71,22 +74,31 @@ the bug is fixed upstream).
 
 `.github/workflows/repro.yml` runs both Debian and Alpine on
 `ubuntu-latest` (amd64). Docker layer cache is wired up via
-`type=gha` (scoped per-OS) so the ddtrace + pcov layers don't get
+`type=gha` (scoped per-OS) so the ddtrace install layer doesn't get
 rebuilt every push.
 
-The job fails only if **Part 1 (data corruption)** stops reproducing —
-that's the universal, layout-independent symptom. The SIGSEGV count is
-reported in the job summary but doesn't gate the build, since whether
-amd64 segfaults at the same rate as aarch64 is an open question per
-the findings notes.
+The job doesn't assert on outcomes — it just runs the repro and posts
+the full output plus a summary (Part 1 result, SIGSEGV count) to the
+job summary, so you can read what each `os × arch` combination actually
+does. SIGSEGV is layout-dependent (e.g. observed 0% on alpine-amd64,
+~50% on debian-amd64, 100% on aarch64), so a green CI run does not
+mean the bug is gone — read the summary.
 
 Trigger manually with custom inputs via the **Run workflow** button.
 
 ## Confirmed reproductions
 
-| host arch | os     | data corruption | SIGSEGV (n=100) |
-|-----------|--------|-----------------|-----------------|
-| aarch64   | debian | yes             | 100/100         |
-| aarch64   | alpine | yes             | 100/100         |
-| amd64     | debian | tbd via CI      | tbd via CI      |
-| amd64     | alpine | tbd via CI      | tbd via CI      |
+`Part 1` = at least one `datadog.*` directive wrongly appears in
+`php -n -d extension=ddtrace.so --ini=diff` (universal symptom — orig
+should equal value, so nothing should appear).
+
+| host arch | os     | Part 1 | SIGSEGV (n=100) |
+|-----------|--------|--------|-----------------|
+| aarch64   | debian | yes    | 100/100         |
+| aarch64   | alpine | yes    | 100/100         |
+| amd64     | debian | yes    | ~50/100         |
+| amd64     | alpine | yes    | 0/100 (NULL orig — no deref) |
+
+The visible orig_value form differs by layout (garbage bytes on
+aarch64, `(none)` / `""` on amd64), but the row appearing at all is
+the bug.

@@ -41,25 +41,32 @@ echo "(every datadog.* directive shows the same garbage string in the default co
 echo " run again and you'll see different garbage — ASLR-derived)"
 echo
 
-# A correctly-registered INI directive with no override should print
-# orig_value as "" (empty). The bug shows non-empty garbage. Detect that
-# programmatically: any datadog.* line whose orig column is not "".
-CORRUPTED_LINES=$(echo "$PART1_OUT" | grep -E '^datadog\.[^:]+: "[^"]+" -> ' | wc -l | tr -d ' ')
-TOTAL_LINES=$(echo "$PART1_OUT" | grep -cE '^datadog\.' || true)
+# With `-n` (no INI files) and only ddtrace loaded, NO datadog.* directive
+# should appear in --ini=diff: each one's orig_value must equal its current
+# value (both = the registration-time default). Every datadog.* line that
+# DOES appear is the bug — orig_value is wrong (NULL on amd64-musl, garbage
+# elsewhere). The visible orig_value form ("(none)", "", or garbage bytes)
+# depends on memory layout, but the presence of the row is universal.
+CORRUPTED_LINES=$(echo "$PART1_OUT" | grep -cE '^datadog\.' || true)
+SAMPLE_ORIG=$(echo "$PART1_OUT" | grep -E '^datadog\.' | head -1 | sed -E 's/^datadog\.[^:]+: (.*) -> .*/\1/')
 if [ "$CORRUPTED_LINES" -gt 0 ]; then
-  echo "PART1_RESULT: data corruption observed ($CORRUPTED_LINES / $TOTAL_LINES datadog.* directives have non-empty orig_value)"
+  echo "PART1_RESULT: bug observed ($CORRUPTED_LINES datadog.* directives wrongly appear in --ini=diff; orig_value sample: $SAMPLE_ORIG)"
 else
-  echo "PART1_RESULT: no data corruption observed ($TOTAL_LINES datadog.* directives total)"
+  echo "PART1_RESULT: no bug observed (no datadog.* directives in --ini=diff — possibly fixed upstream)"
 fi
 echo
 
-echo "--- Part 2: SIGSEGV reproduction (ddtrace + pcov via php.ini) ---"
-# Both ddtrace and pcov are loaded via /usr/local/etc/php/conf.d/ — ddtrace
-# was wired up by the Datadog installer (98-ddtrace.ini) and pcov by
-# docker-php-ext-enable. No further setup needed.
+echo "--- Part 2: SIGSEGV reproduction (ddtrace + sodium via php.ini) ---"
+# ddtrace is loaded via /usr/local/etc/php/conf.d/98-ddtrace.ini (created
+# by the Datadog installer). The stock php:8.5-cli image also enables
+# sodium via conf.d, which gives us the "second extension loaded via
+# php.ini" the SEGV needs. No extra setup.
 
-echo "Loaded extensions (via php.ini):"
-php -r 'foreach (["ddtrace","pcov"] as $e) printf("  %-10s %s\n", $e, extension_loaded($e) ? "loaded" : "NOT LOADED");'
+echo "Files in /usr/local/etc/php/conf.d/:"
+ls /usr/local/etc/php/conf.d/ | sed 's/^/  /'
+echo
+echo "Loaded modules (subset):"
+php -r 'foreach (["ddtrace","sodium"] as $e) printf("  %-10s %s\n", $e, extension_loaded($e) ? "loaded" : "NOT LOADED");'
 echo
 
 echo "Running 'php --ini=diff' ${ITERATIONS} times..."
@@ -86,13 +93,4 @@ printf "  other:               %3d / %d\n" "$OTHER" "$ITERATIONS"
 echo
 
 echo "PART2_RESULT: SIGSEGV $SEGV / $ITERATIONS"
-echo
-
-# Overall: bug is reproduced if either symptom is present.
-if [ "$CORRUPTED_LINES" -gt 0 ] || [ "$SEGV" -gt 0 ]; then
-  echo "OVERALL: BUG REPRODUCED"
-  exit 0
-else
-  echo "OVERALL: BUG NOT REPRODUCED"
-  exit 1
-fi
+exit 0

@@ -1,16 +1,7 @@
-# Minimal repro: ddtrace + pcov on php:8.5-cli-alpine (Alpine).
+# Minimal repro: stock php:8.5-cli-alpine + ddtrace.
 FROM php:8.5-cli-alpine
 
-RUN apk add --no-cache \
-        ca-certificates \
-        curl \
-        libgcc \
- && apk add --no-cache --virtual .build-deps \
-        $PHPIZE_DEPS \
-        curl-dev \
- && pecl install pcov \
- && docker-php-ext-enable pcov \
- && apk del .build-deps
+RUN apk add --no-cache ca-certificates curl libgcc
 
 ARG DD_TRACE_RELEASE=latest
 RUN set -eux; \

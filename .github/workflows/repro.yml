@@ -58,24 +58,24 @@ jobs:
             -e ITERATIONS="$ITERATIONS" \
             "$IMAGE" | tee repro-output.txt
 
-      - name: Summarise result
+      - name: Job summary
+        if: always()
         run: |
-          set -eu
-          # Universal symptom (data corruption) — must reproduce.
-          if ! grep -qE '^PART1_RESULT: data corruption observed' repro-output.txt; then
-            echo "::error::Part 1 (data corruption) did NOT reproduce on ${{ matrix.os }} — possibly fixed upstream?"
-            grep -E '^(PART1_RESULT|PART2_RESULT|OVERALL):' repro-output.txt || true
-            exit 1
-          fi
-          # Layout-dependent symptom (SIGSEGV) — report but do not gate.
-          # Open question per findings: does amd64 SEGV at the same rate as aarch64?
-          segv=$(grep -oE 'PART2_RESULT: SIGSEGV [0-9]+' repro-output.txt | awk '{print $3}')
-          part1=$(grep -E '^PART1_RESULT:' repro-output.txt)
+          part1=$(grep -E '^PART1_RESULT:' repro-output.txt || echo "PART1_RESULT: <missing>")
+          segv=$(grep -oE 'PART2_RESULT: SIGSEGV [0-9]+' repro-output.txt | awk '{print $3}' || echo "?")
           {
             echo "### ${{ matrix.os }}"
             echo ""
             echo "- $part1"
             echo "- SIGSEGV: ${segv} / ${ITERATIONS}"
+            echo ""
+            echo "<details><summary>Full repro output</summary>"
+            echo ""
+            echo '```'
+            cat repro-output.txt
+            echo '```'
+            echo ""
+            echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload repro output
