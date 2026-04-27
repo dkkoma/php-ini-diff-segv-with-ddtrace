@@ -58,15 +58,15 @@ else
 fi
 echo
 
-echo "--- Part 2: SIGSEGV reproduction (ddtrace + apcu via php.ini) ---"
+echo "--- Part 2: SIGSEGV reproduction (ddtrace + pcov via php.ini) ---"
 # Both ddtrace (98-ddtrace.ini, created by the Datadog installer) and
-# apcu (docker-php-ext-apcu.ini) are loaded via /usr/local/etc/php/conf.d/.
+# pcov (docker-php-ext-pcov.ini) are loaded via /usr/local/etc/php/conf.d/.
 
 echo "Files in /usr/local/etc/php/conf.d/:"
 ls /usr/local/etc/php/conf.d/ | sed 's/^/  /'
 echo
 echo "Loaded modules (subset):"
-php -r 'foreach (["ddtrace","apcu","sodium"] as $e) printf("  %-10s %s\n", $e, extension_loaded($e) ? "loaded" : "NOT LOADED");'
+php -r 'foreach (["ddtrace","pcov","sodium"] as $e) printf("  %-10s %s\n", $e, extension_loaded($e) ? "loaded" : "NOT LOADED");'
 echo
 
 echo "Running 'php --ini=diff' ${ITERATIONS} times..."

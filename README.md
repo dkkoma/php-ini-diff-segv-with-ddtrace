@@ -23,12 +23,12 @@ for the full investigation notes.
 - ddtrace: installed via the official Datadog installer
   (`datadog-setup.php`), which also auto-creates
   `/usr/local/etc/php/conf.d/98-ddtrace.ini`.
-- Second extension: **apcu** (PECL, ~10s build). Lightweight and ubiquitous
-  in production PHP apps as a userland cache, so this represents a
-  realistic setup. The stock-shipped `sodium` alone is enough on arm64
-  but doesn't reliably reach the SEGV layout on amd64 — `apcu` adds
-  enough INI directives to perturb the layout into the SEGV regime
-  there too.
+- Second extension: **pcov** (PECL, ~5–10s build). The lightest of the
+  three extensions the upstream findings notes confirmed as reliably
+  triggering the SEGV on aarch64 (the others being grpc and xdebug).
+  We also tried `apcu` (lighter and more production-common) but it
+  did not push amd64 layouts into the SEGV regime in CI, so we settled
+  on pcov for repro reliability over production realism.
 
 ## Run locally
 

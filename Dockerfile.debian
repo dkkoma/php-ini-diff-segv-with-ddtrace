@@ -1,10 +1,14 @@
-# Minimal repro: stock php:8.5-cli + ddtrace + apcu.
+# Minimal repro: stock php:8.5-cli + ddtrace + pcov.
 #
-# `apcu` is the "second extension loaded via php.ini" that pushes the
-# memory layout into the SEGV regime. It's lightweight (~10s PECL build)
-# and ubiquitous in production PHP apps as a userland cache, so this
-# represents a realistic setup. The default-shipped `sodium` alone is
-# enough on arm64 but doesn't reach the SEGV layout on amd64.
+# `pcov` is the "second extension loaded via php.ini" that pushes the
+# memory layout into the SEGV regime. Per the upstream findings notes,
+# pcov / grpc / xdebug are the three that reliably trigger SEGV on
+# aarch64; pcov is the lightest (~5–10s PECL build). It's a CI/coverage
+# tool rather than a production-common extension, but reliability of
+# the repro outweighs production realism for an upstream bug report.
+# We tried `apcu` (lighter and more production-realistic) but it did
+# not push amd64 layouts into SEGV in CI — INI-directive count alone
+# isn't the determining factor.
 FROM php:8.5-cli
 
 RUN apt-get update -qq \
@@ -12,8 +16,8 @@ RUN apt-get update -qq \
         ca-certificates \
         curl \
         $PHPIZE_DEPS \
- && pecl install apcu \
- && docker-php-ext-enable apcu \
+ && pecl install pcov \
+ && docker-php-ext-enable pcov \
  && apt-get purge -y --auto-remove $PHPIZE_DEPS \
  && rm -rf /var/lib/apt/lists/*
 
