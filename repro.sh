@@ -48,7 +48,9 @@ echo
 # elsewhere). The visible orig_value form ("(none)", "", or garbage bytes)
 # depends on memory layout, but the presence of the row is universal.
 CORRUPTED_LINES=$(echo "$PART1_OUT" | grep -cE '^datadog\.' || true)
-SAMPLE_ORIG=$(echo "$PART1_OUT" | grep -E '^datadog\.' | head -1 | sed -E 's/^datadog\.[^:]+: (.*) -> .*/\1/')
+# Use awk so the field split is greedy on " -> " from the right; some
+# layouts produce multi-line garbage that confuses sed.
+SAMPLE_ORIG=$(echo "$PART1_OUT" | awk -F': ' '/^datadog\./ {sub(/ -> .*$/,"",$2); print $2; exit}')
 if [ "$CORRUPTED_LINES" -gt 0 ]; then
   echo "PART1_RESULT: bug observed ($CORRUPTED_LINES datadog.* directives wrongly appear in --ini=diff; orig_value sample: $SAMPLE_ORIG)"
 else
